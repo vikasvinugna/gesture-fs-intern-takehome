@@ -12,7 +12,11 @@ Useful docs:
   - HuggingFace pipelines: https://python.langchain.com/docs/integrations/llms/huggingface_pipelines/
 """
 
+import argparse
 import os
+import sys
+from typing import Any, Callable, Dict, List
+
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from src.knowledge_base import build_knowledge_base
 
@@ -20,7 +24,7 @@ from src.knowledge_base import build_knowledge_base
 # ──────────────────────────────────────────────
 # Provided: local LLM (no API key needed)
 # ──────────────────────────────────────────────
-def get_llm():
+def get_llm() -> Callable[[str], List[Dict[str, str]]]:
     """Return a callable local LLM using flan-t5-base.
 
     Downloads ~1GB on first run, then cached.
@@ -58,7 +62,11 @@ Answer:"""
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TODO 1: Implement ask_question
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def ask_question(vector_store, llm, question: str) -> dict:
+def ask_question(
+    vector_store: Any,
+    llm: Callable[[str], List[Dict[str, str]]],
+    question: str,
+) -> Dict[str, Any]:
     """Retrieve relevant chunks and generate an answer.
 
     Steps:
@@ -93,11 +101,62 @@ def ask_question(vector_store, llm, question: str) -> dict:
     return {"answer": answer, "sources": sources}
 
 
+# ──────────────────────────────────────────────
+# Bonus: friendly error handling + CLI plumbing
+# ──────────────────────────────────────────────
+def _build_knowledge_base_or_exit(data_dir: str) -> Any:
+    """Build the knowledge base, exiting with a clear message instead of a
+    raw traceback if the data directory is missing or empty."""
+    if not os.path.isdir(data_dir):
+        print(f"Error: data directory not found at '{data_dir}'.")
+        print("Make sure a data/ folder with .txt files exists next to src/.")
+        sys.exit(1)
+
+    txt_files = [f for f in os.listdir(data_dir) if f.endswith(".txt")]
+    if not txt_files:
+        print(f"Error: no .txt files found in '{data_dir}'.")
+        print("Add at least one .txt file to the data/ directory and try again.")
+        sys.exit(1)
+
+    try:
+        return build_knowledge_base(data_dir)
+    except Exception as exc:
+        print(f"Error: failed to build the knowledge base: {exc}")
+        sys.exit(1)
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Separated out so tests can exercise CLI parsing without touching models."""
+    parser = argparse.ArgumentParser(
+        description="Interactive Q&A chatbot over a marketing agency's docs."
+    )
+    parser.add_argument(
+        "--query",
+        "-q",
+        type=str,
+        default=None,
+        help="Ask a single question and print the answer, instead of "
+        "starting the interactive loop.",
+    )
+    return parser
+
+
+def _print_result(result: Dict[str, Any]) -> None:
+    print("\n📄 Sources:")
+    for i, source in enumerate(result["sources"], start=1):
+        snippet = source.replace("\n", " ").strip()
+        if len(snippet) > 200:
+            snippet = snippet[:200] + "..."
+        print(f"  {i}. {snippet}")
+
+    print(f"\n💬 Answer: {result['answer']}\n")
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TODO 2: Complete the interactive loop
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def main():
-    """Interactive Q&A loop.
+def main() -> None:
+    """Interactive Q&A loop (or single-question mode via --query).
 
     Steps:
       1. Build the knowledge base using build_knowledge_base()
@@ -109,11 +168,23 @@ def main():
          - Calls ask_question() with their input
          - Prints the retrieved sources and the answer
     """
+    args = _build_arg_parser().parse_args()
+
     data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
 
-    vector_store = build_knowledge_base(data_dir)
+    vector_store = _build_knowledge_base_or_exit(data_dir)
 
     llm = get_llm()
+
+    # --query "..." mode: answer one question and exit, no interactive loop.
+    if args.query is not None:
+        question = args.query.strip()
+        if not question:
+            print("Error: --query cannot be empty.")
+            sys.exit(1)
+        result = ask_question(vector_store, llm, question)
+        _print_result(result)
+        return
 
     print("Ask a question about our services, pricing, or process.")
     print("Type 'quit' to exit.\n")
@@ -129,15 +200,7 @@ def main():
             break
 
         result = ask_question(vector_store, llm, question)
-
-        print("\n📄 Sources:")
-        for i, source in enumerate(result["sources"], start=1):
-            snippet = source.replace("\n", " ").strip()
-            if len(snippet) > 200:
-                snippet = snippet[:200] + "..."
-            print(f"  {i}. {snippet}")
-
-        print(f"\n💬 Answer: {result['answer']}\n")
+        _print_result(result)
 
 
 if __name__ == "__main__":

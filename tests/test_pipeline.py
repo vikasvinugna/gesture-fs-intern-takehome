@@ -9,7 +9,12 @@ import pytest
 from transformers import pipeline as hf_pipeline
 
 from src.knowledge_base import build_knowledge_base
-from src.pipeline import ask_question, get_llm
+from src.pipeline import (
+    ask_question,
+    get_llm,
+    _build_arg_parser,
+    _build_knowledge_base_or_exit,
+)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
@@ -95,3 +100,43 @@ class TestAnswerGeneration:
         assert "2,500" in answer or "2500" in answer or "starter" in answer, (
             "Answer should address the pricing question"
         )
+
+
+# ────────────────────────────────
+# Bonus: --query CLI argument
+# ────────────────────────────────
+class TestCliArgumentParsing:
+    def test_no_query_flag_defaults_to_none(self):
+        parser = _build_arg_parser()
+        args = parser.parse_args([])
+        assert args.query is None
+
+    def test_query_flag_long_form(self):
+        parser = _build_arg_parser()
+        args = parser.parse_args(["--query", "How much does Growth cost?"])
+        assert args.query == "How much does Growth cost?"
+
+    def test_query_flag_short_form(self):
+        parser = _build_arg_parser()
+        args = parser.parse_args(["-q", "Do you offer SEO?"])
+        assert args.query == "Do you offer SEO?"
+
+
+# ────────────────────────────────
+# Bonus: missing/empty data dir error handling
+# ────────────────────────────────
+class TestKnowledgeBaseErrorHandling:
+    def test_missing_data_dir_exits_cleanly(self, tmp_path, capsys):
+        missing_dir = str(tmp_path / "does_not_exist")
+        with pytest.raises(SystemExit) as exc_info:
+            _build_knowledge_base_or_exit(missing_dir)
+        assert exc_info.value.code == 1
+        assert "not found" in capsys.readouterr().out.lower()
+
+    def test_empty_data_dir_exits_cleanly(self, tmp_path, capsys):
+        empty_dir = tmp_path / "empty_data"
+        empty_dir.mkdir()
+        with pytest.raises(SystemExit) as exc_info:
+            _build_knowledge_base_or_exit(str(empty_dir))
+        assert exc_info.value.code == 1
+        assert "no .txt files" in capsys.readouterr().out.lower()
